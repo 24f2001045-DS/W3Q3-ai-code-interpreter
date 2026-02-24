@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import traceback
 from io import StringIO
 from typing import List
@@ -17,12 +18,12 @@ load_dotenv()
 app = FastAPI()
 
 # ---------------------------------------------------
-# ✅ CORS ENABLED (Required)
+# ✅ CORS ENABLED (Required for testing)
 # ---------------------------------------------------
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
+    allow_origins=["*"],  # OK for testing
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,6 +50,9 @@ class ErrorAnalysis(BaseModel):
 # ---------------------------------------------------
 
 def execute_python_code(code: str) -> dict:
+    """
+    Executes Python code and returns exact stdout or exact traceback.
+    """
     old_stdout = sys.stdout
     sys.stdout = StringIO()
 
@@ -72,45 +76,61 @@ def execute_python_code(code: str) -> dict:
 def analyze_error_with_ai(code: str, traceback_text: str) -> List[int]:
     """
     Uses Gemini with structured output to identify exact error line numbers.
+    Always fails safely (never crashes API).
     """
 
-    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+    try:
+        client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-    prompt = f"""
-Analyze this Python code and its error traceback.
-Identify the exact line number(s) where the error occurred.
+        prompt = f"""
+You are analyzing Python execution errors.
+
+Given the CODE and its TRACEBACK below,
+extract ONLY the line number(s) from the original code
+where the error occurred.
+
+Important:
+- Return ONLY valid JSON.
+- No explanations.
+- No markdown.
+- No extra text.
+
+Format:
+{{ "error_lines": [line_numbers] }}
 
 CODE:
 {code}
 
 TRACEBACK:
 {traceback_text}
-
-Return only the JSON object with the error line numbers.
 """
 
-    response = client.models.generate_content(
-        model="gemini-1.5-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=types.Schema(
-                type=types.Type.OBJECT,
-                properties={
-                    "error_lines": types.Schema(
-                        type=types.Type.ARRAY,
-                        items=types.Schema(type=types.Type.INTEGER),
-                    )
-                },
-                required=["error_lines"],
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "error_lines": types.Schema(
+                            type=types.Type.ARRAY,
+                            items=types.Schema(type=types.Type.INTEGER),
+                        )
+                    },
+                    required=["error_lines"],
+                ),
             ),
-        ),
-    )
+        )
 
-    # Validate structured output using Pydantic
-    result = ErrorAnalysis.model_validate_json(response.text)
+        # Safe JSON parsing (prevents 500 errors)
+        data = json.loads(response.text)
+        return data.get("error_lines", [])
 
-    return result.error_lines
+    except Exception as e:
+        # Never crash API
+        print("AI error analysis failed:", str(e))
+        return []
 
 
 # ---------------------------------------------------
