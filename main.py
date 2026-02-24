@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import traceback
 from io import StringIO
 from typing import List
@@ -23,7 +24,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # OK for testing
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,27 +76,17 @@ def execute_python_code(code: str) -> dict:
 
 def analyze_error_with_ai(code: str, traceback_text: str) -> List[int]:
     """
-    Uses Gemini with structured output to identify exact error line numbers.
-    Always fails safely (never crashes API).
+    Uses Gemini structured output to identify exact error line numbers.
+    Falls back to regex extraction if AI fails.
     """
 
     try:
-        client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
         prompt = f"""
-You are analyzing Python execution errors.
+Analyze the Python CODE and TRACEBACK.
+Return ONLY valid JSON in this format:
 
-Given the CODE and its TRACEBACK below,
-extract ONLY the line number(s) from the original code
-where the error occurred.
-
-Important:
-- Return ONLY valid JSON.
-- No explanations.
-- No markdown.
-- No extra text.
-
-Format:
 {{ "error_lines": [line_numbers] }}
 
 CODE:
@@ -106,7 +97,7 @@ TRACEBACK:
 """
 
         response = client.models.generate_content(
-            model="gemini- 2.5-flash",
+            model="gemini-1.5-flash",  # Stable + safe
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -123,13 +114,14 @@ TRACEBACK:
             ),
         )
 
-        # Safe JSON parsing (prevents 500 errors)
-        data = json.loads(response.text)
-        return data.get("error_lines", [])
+        parsed = json.loads(response.text)
+        return parsed.get("error_lines", [])
 
     except Exception as e:
-        # Never crash API
-        print("AI error analysis failed:", str(e))
+        # ✅ FALLBACK: Extract line number directly from traceback
+        match = re.search(r'line (\d+)', traceback_text)
+        if match:
+            return [int(match.group(1))]
         return []
 
 
