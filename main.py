@@ -77,7 +77,7 @@ def execute_python_code(code: str) -> dict:
 def analyze_error_with_ai(code: str, traceback_text: str) -> List[int]:
     """
     Uses Gemini structured output to identify exact error line numbers.
-    Falls back to regex extraction if AI fails.
+    Falls back safely to extracting from traceback if AI fails.
     """
 
     try:
@@ -89,6 +89,10 @@ Return ONLY valid JSON in this format:
 
 {{ "error_lines": [line_numbers] }}
 
+Important:
+- Extract line numbers from the original user code.
+- Ignore any internal framework files.
+
 CODE:
 {code}
 
@@ -97,7 +101,7 @@ TRACEBACK:
 """
 
         response = client.models.generate_content(
-            model="gemini-1.5-flash",  # Stable + safe
+            model="gemini-1.5-flash",
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
@@ -117,9 +121,10 @@ TRACEBACK:
         parsed = json.loads(response.text)
         return parsed.get("error_lines", [])
 
-    except Exception as e:
-        # ✅ FALLBACK: Extract line number directly from traceback
-        match = re.search(r'line (\d+)', traceback_text)
+    except Exception:
+        # ✅ SAFE FALLBACK:
+        # Extract only from user code reference: File "<string>", line X
+        match = re.search(r'File "<string>", line (\d+)', traceback_text)
         if match:
             return [int(match.group(1))]
         return []
