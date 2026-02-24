@@ -129,6 +129,13 @@ TRACEBACK:
             return [int(match.group(1))]
         return []
 
+# ---------------------------------------------------
+# Health Check Endpoint (Required for Render)
+# ---------------------------------------------------
+
+@app.get("/")
+def health_check():
+    return {"status": "ok"}
 
 # ---------------------------------------------------
 # FastAPI Endpoint
